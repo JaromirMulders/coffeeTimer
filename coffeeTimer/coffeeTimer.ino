@@ -8,7 +8,7 @@
 #define cEncoderPinR 4
 #define cEncoderPinB 5
 
-#define cDotAmnt 16
+#define cDotAmnt 64
 
 #define cScreenSize    240
 #define cScreenCenterX 120
@@ -25,11 +25,13 @@
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 
 unsigned long elapsedTime = 0;
-int16_t encoder = 0;
+uint16_t encoder = 5000;
 bool    button  = 0;
 
 bool grindState = 0;
 unsigned int grindTimer = 0;
+float grindTime = 0.;
+unsigned long countdown;
 
 //create array for all position of dots for the grind animation
 int16_t dotPos[cDotAmnt][2];
@@ -39,6 +41,7 @@ void setup() {
   Serial.begin(9600);
 
   tft.init(cScreenSize, cScreenSize, SPI_MODE2);    // Init ST7789 display 240x240 pixel
+  
   tft.setRotation(2);
   clearScreen();
 
@@ -55,55 +58,114 @@ void setup() {
 
   digitalWrite(cRelayPin,HIGH);
 
+  Serial.println("initialized!");
+
 }
 
 void loop() {
+  
   elapsedTime = millis();
 
-  encoder = readEncoder();
-  button  = readbutton();
-  //Serial.println(encoder);
-  startGrind();
-
-  showTime();
+  encoder = readEncoder(); //get integer time from encoder
+  grindTime = (float)encoder*0.001; //ms to sec
+  button  = readbutton();  //if Button is pressed
+  
+  unsigned long startTime = changeGrind();
 
   if(!grindState){
-    
+    digitalWrite(cRelayPin,HIGH);
+    showTime();    
   }else{
+    digitalWrite(cRelayPin,LOW);
     grindAnimation();
+    countdownTime(startTime);
   }
 
-  delay(0);
-
 }
+
+int16_t readEncoder(){
+  static int16_t encoderSum = encoder;  
+  static bool oldVal = 0;
+  
+  //check direction that encoder goes in and change value accordingly
+  //read first pin to check if encoder has moved
+  bool encoderValR = digitalRead(cEncoderPinR);
+  //check if encoder has moved and has changed previous  state 
+  bool moveCheck = oldVal&(encoderValR^1);
+  if(moveCheck){
+    bool encoderValL = digitalRead(cEncoderPinL); //check dir with second pin
+    int8_t encoderDelta = (encoderValL<<1)-1; //calculate delta with dir
+    encoderSum+=encoderDelta*100; //add delta to encoderval in steps of 100ms
+    encoderSum = constrain(encoderSum,100,50000); //limuit from 100ms to 50sec
+  }//if
+  oldVal = encoderValR;
+  
+  return encoderSum;
+}//readButton
 
 void showTime(){
-  static int16_t oldVal = 0;
-  tft.setTextSize(5);
+  static float oldVal = 0.0;
+  tft.setTextSize(4);
 
 
-  if(encoder != oldVal){
-    tft.setCursor(cScreenCenterX-50, cScreenCenterX-20);
+  if(grindTime != oldVal){
+    tft.setCursor(cScreenCenterX-100, cScreenCenterY-20);
     tft.setTextColor(ST77XX_BLACK);
     tft.print(oldVal);
+    tft.print(" sec");    
     
-    oldVal = encoder;
+    oldVal = grindTime;
   }
   
-  tft.setCursor(cScreenCenterX-50, cScreenCenterX-20);
+  tft.setCursor(cScreenCenterX-100, cScreenCenterY-20);
   tft.setTextColor(ST77XX_GREEN);
-  tft.print(encoder);  
+  tft.print(grindTime);  
+  tft.print(" sec");  
 
 }
 
-void startGrind(){
+void countdownTime(unsigned long startTime){
+  static float oldVal = 0.;
 
+  countdown = elapsedTime - startTime;
+
+  //in the end make a int becease the countdown doesnt stop excalty at zero zo unsigned number will wrap
+  int16_t invCountdown = encoder-countdown;
+  if(invCountdown < 0) invCountdown = 0;
+  float showTime = (float)invCountdown*0.001;
+  Serial.println(showTime);
+
+  if(showTime != oldVal){
+    tft.setCursor(cScreenCenterX-100, cScreenCenterY-20);
+    tft.setTextColor(ST77XX_BLACK);
+    tft.print(oldVal);
+    tft.print(" sec");    
+    oldVal = showTime;
+  }
+  
+  tft.setCursor(cScreenCenterX-100, cScreenCenterY-20);
+  tft.setTextColor(ST77XX_RED);
+  tft.print(showTime);  
+  tft.print(" sec");  
+  
+  if(countdown >= encoder){
+    clearScreen();
+    grindState^=1;
+  }//if
+
+}
+
+unsigned long changeGrind(){
+
+  static unsigned long startTime = 0;
+  
   if(button){
+    startTime = millis();
     grindState^=1;
     if(!grindState) clearScreen();
-  }else{
-    
   }
+
+  return startTime;
   
 }//startGrind
 
@@ -113,7 +175,7 @@ bool readbutton(){
   
   bool buttonPressed = digitalRead(cEncoderPinB)^1;  
   bool buttonVal = 0;
-  //if button s pressed
+  //if button is pressed
   if(buttonPressed){
     //check how much time has passed since last click
     unsigned long buttonCheck = elapsedTime-sinceButtonPressed;
@@ -130,24 +192,7 @@ bool readbutton(){
   return buttonVal;
 }//readButton
 
-int16_t readEncoder(){
-  static int16_t encoderSum = 0;  
-  static bool oldVal = 0;
-  
-  //check direction that encoder goes in and change value accordingly
-  //read first pin to check if encoder has moved
-  bool encoderValR = digitalRead(cEncoderPinR);
-  //check if encoder has moved and has changed previous  state 
-  bool moveCheck = oldVal&(encoderValR^1);
-  if(moveCheck){
-    bool encoderValL = digitalRead(cEncoderPinL); //check dir with second pin
-    int8_t encoderDelta = (encoderValL<<1)-1; //calculate delta with dir
-    encoderSum+=encoderDelta; //add delta to encoderval
-  }//if
-  oldVal = encoderValR;
-  
-  return encoderSum;
-}//readButton
+
 
 void loadScreen(){
   clearScreen();
@@ -170,8 +215,9 @@ void setGrindAnimation(){
 }
 
 void grindAnimation(){
-  
-   for(int8_t i = 0; i < cDotAmnt; i++){
+
+   int dotGrow = countdown>>8;
+   for(int8_t i = 0; i < dotGrow; i++){
      //erase old dots
      tft.fillCircle(dotPos[i][0], dotPos[i][1]+dotSize[i], dotSize[i], ST77XX_BLACK);
      //move dots downwards in random motion
